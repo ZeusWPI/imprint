@@ -8,9 +8,23 @@
 
 ## Building
 
-1. Install the [ethernet](https://www.arduino.cc/reference/en/libraries/ethernet/) and [adafruit fingerprint](https://github.com/adafruit/Adafruit-Fingerprint-Sensor-Library) libraries
-2. Edit `secrets.h` to contain the correct values
-3. Upload the sketch
+ 1. Install the [ethernet](https://www.arduino.cc/reference/en/libraries/ethernet/) and [adafruit fingerprint](https://github.com/adafruit/Adafruit-Fingerprint-Sensor-Library) libraries
+ 2. Edit `secrets.h` to contain the correct values
+ 3. Upload the sketch
+
+## Commands
+
+ - "{time};enroll;{ID};" - Enroll a new fingerprint with id {ID} \
+   This will put the sensor into a loop where it waits for a finger to be
+   detected. Once it finds one it will enroll it with the given id and send
+   the image to {mattermore_url}/fingerprint/image/{id}
+ - "{time};delete;{ID};" - Delete the fingerprint with id {ID}
+ - "{time};list;" - List all used ids
+
+## Responses
+
+ - POST {mattermore_url}/fingerprint/detect/{id} - Fingerprint with id {ID} was
+ detected, if id = 0 the fingerprint was unknown.
 
 ## R503 Pinout
 
