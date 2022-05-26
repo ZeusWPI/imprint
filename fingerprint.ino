@@ -22,13 +22,27 @@ Adafruit_Fingerprint sensor = Adafruit_Fingerprint(&serial, 0);
 EthernetServer server(80);
 EthernetClient client;
 
+// Whether or not the program is in enroll mode
 volatile bool ENROLL_ENABLED = false;
+// Whether or not a finger was detected;
 volatile bool FINGER_DETECTED = false;
 
 // The timestamp sent with the previous request
 //
 // Used to prevent replay attacks
 uint64_t previous_timestamp = 0;
+
+// ISR to handle a fingerprint being detected
+void detect_fingerprint_ISR()
+{
+	if (ENROLL_ENABLED) {
+		// If the sensor is enrolling a fingerprint it shouldn't try
+		// recognize one
+		return;
+	}
+
+	FINGER_DETECTED = true;
+}
 
 // Maintain ethernet connection and log errors
 void maintainEthernet()
@@ -111,149 +125,121 @@ bool try_read_hmac_header(uint8_t *buffer)
 	return true;
 }
 
-// Enroll a new fingerprint
-void enroll_fingerprint(uint8_t enroll_id)
+// Put the LED in its standard mode of solid purple
+void led_standard()
 {
-	Serial.print(F("enrolling fingerprint #"));
-	Serial.print(enroll_id);
-	Serial.println(F("..."));
-	Serial.println(F("waiting for first fingerprint..."));
-	uint8_t result = -1;
-	while (result != FINGERPRINT_OK) {
-		result = sensor.getImage();
-		switch (result) {
-		case FINGERPRINT_OK:
-		case FINGERPRINT_NOFINGER:
-			break;
-		case FINGERPRINT_PACKETRECIEVEERR:
-			Serial.println(F("communication error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
-			break;
-		case FINGERPRINT_IMAGEFAIL:
-			Serial.println(F("imaging error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
-			break;
-		default:
-			Serial.println(F("unknown error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
-			break;
-		}
+	sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
+}
+
+// Flash the LED red for 1s to signify an error
+void led_warning()
+{
+	sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
+	delay(1000);
+}
+
+// Breathe the LED blue infinitely to signify the program is in enroll mode
+void led_enroll()
+{
+	sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 96, FINGERPRINT_LED_BLUE, 255);
+}
+
+// Call and return the result of sensor.getImage() while logging errors
+uint8_t get_image_and_log()
+{
+	uint8_t result = sensor.getImage();
+	switch (result) {
+	case FINGERPRINT_OK:
+	case FINGERPRINT_NOFINGER:
+		break;
+	case FINGERPRINT_PACKETRECIEVEERR:
+		Serial.println(F("communication error"));
+		goto show_warning;
+	case FINGERPRINT_IMAGEFAIL:
+		Serial.println(F("imaging error"));
+		goto show_warning;
+	default:
+		Serial.println(F("unknown error"));
+	show_warning:
+		led_warning();
+		break;
 	}
 
-	Serial.println(F("creating first feature map..."));
-	result = sensor.image2Tz(1);
+	return result;
+}
+
+// Call and return the result of sensor.image2Tz(slot) while logging errors
+uint8_t image2tz_and_log(uint8_t slot)
+{
+	uint8_t result = sensor.image2Tz(slot);
 	switch (result) {
 	case FINGERPRINT_OK:
 		break;
 	case FINGERPRINT_IMAGEMESS:
 		Serial.println(F("image too messy"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto show_warning;
 	case FINGERPRINT_PACKETRECIEVEERR:
 		Serial.println(F("communication error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto show_warning;
 	case FINGERPRINT_FEATUREFAIL:
 		Serial.println(F("could not read finger features"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto show_warning;
 	case FINGERPRINT_INVALIDIMAGE:
 		Serial.println(F("invalid image"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto show_warning;
 	default:
 		Serial.println(F("unknown error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
+	show_warning:
+		led_warning();
 		break;
 	}
 
+	return result;
+}
+
+// Enroll a new fingerprint
+void enroll_fingerprint(uint8_t enroll_id)
+{
+	led_enroll();
+
+	Serial.print(F("enrolling fingerprint #"));
+	Serial.print(enroll_id);
+	Serial.println(F("..."));
+
+	Serial.println(F("waiting for first fingerprint..."));
+	uint8_t result = -1;
+	while (result != FINGERPRINT_OK) {
+		result = get_image_and_log();
+		led_enroll();
+	}
+
+	Serial.println(F("creating first feature map..."));
+	result = image2tz_and_log(1);
+	if (result != FINGERPRINT_OK) {
+		led_standard();
+		return;
+	}
+
+	// Wait for user to remove their finger
 	sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_PURPLE, 255);
 	result = 0;
 	while (result != FINGERPRINT_NOFINGER) {
 		result = sensor.getImage();
 	}
-	sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
+	led_enroll();
 
 	Serial.println(F("waiting for second fingerprint..."));
 	result = -1;
 	while (result != FINGERPRINT_OK) {
-		result = sensor.getImage();
-		switch (result) {
-		case FINGERPRINT_OK:
-		case FINGERPRINT_NOFINGER:
-			break;
-		case FINGERPRINT_PACKETRECIEVEERR:
-			Serial.println(F("communication error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
-			break;
-		case FINGERPRINT_IMAGEFAIL:
-			Serial.println(F("imaging error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
-			break;
-		default:
-			Serial.println(F("unknown error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
-			break;
-		}
+		result = get_image_and_log();
+		led_enroll();
 	}
 
 	Serial.println(F("creating second feature map..."));
-	result = sensor.image2Tz(2);
-	switch (result) {
-	case FINGERPRINT_OK:
-		break;
-	case FINGERPRINT_IMAGEMESS:
-		Serial.println(F("image too messy"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
+	result = image2tz_and_log(2);
+	if (result != FINGERPRINT_OK) {
+		led_standard();
 		return;
-		break;
-	case FINGERPRINT_PACKETRECIEVEERR:
-		Serial.println(F("communication error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
-	case FINGERPRINT_FEATUREFAIL:
-		Serial.println(F("could not read finger features"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
-	case FINGERPRINT_INVALIDIMAGE:
-		Serial.println(F("invalid image"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
-	default:
-		Serial.println(F("unknown error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
 	}
 
 	Serial.println(F("creating model..."));
@@ -263,22 +249,16 @@ void enroll_fingerprint(uint8_t enroll_id)
 		break;
 	case FINGERPRINT_PACKETRECIEVEERR:
 		Serial.println(F("communication error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto create_model_error;
 	case FINGERPRINT_ENROLLMISMATCH:
 		Serial.println(F("fingerprint mismatch"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto create_model_error;
 	default:
 		Serial.println(F("unknown error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
+	create_model_error:
+		led_warning();
+		led_standard();
 		return;
-		break;
 	}
 
 	Serial.println(F("storing model..."));
@@ -288,134 +268,55 @@ void enroll_fingerprint(uint8_t enroll_id)
 		break;
 	case FINGERPRINT_PACKETRECIEVEERR:
 		Serial.println(F("communication error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto store_model_error;
 	case FINGERPRINT_BADLOCATION:
 		Serial.println(F("bad location"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto store_model_error;
 	case FINGERPRINT_FLASHERR:
 		Serial.println(F("flash error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		return;
-		break;
+		goto store_model_error;
 	default:
 		Serial.println(F("unknown error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
+	store_model_error:
+		led_warning();
+		led_standard();
 		return;
-		break;
 	}
+
+	// TODO: add mattermore callback
 
 	Serial.print(F("enrolled fingerprint #"));
 	Serial.println(enroll_id);
 	sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_BLUE, 8);
-	delay(500);
+	delay(1000);
 
-	return;
-}
-
-// ISR to handle a fingerprint being detected
-void detect_fingerprint_ISR()
-{
-	if (ENROLL_ENABLED) {
-		// If the sensor is enrolling a fingerprint it shouldn't try
-		// recognize one
-		return;
-	}
-
-	FINGER_DETECTED = true;
-	return;
+	led_standard();
 }
 
 // Attempt to recognize the fingerprint on the sensor
-void recognize_fingerprint()
+void try_recognize_fingerprint()
 {
 	if (!FINGER_DETECTED) return;
 
 	FINGER_DETECTED = false;
 
 	Serial.println(F("finger detected, attempting to recognize..."));
+
 	Serial.println(F("reading fingerprint..."));
 	uint8_t result = -1;
-	// The delay(1000)s are used as a crude means of debouncing
 	while (result != FINGERPRINT_OK) {
-		result = sensor.getImage();
-		switch (result) {
-		case FINGERPRINT_OK:
-		case FINGERPRINT_NOFINGER:
-			break;
-		case FINGERPRINT_PACKETRECIEVEERR:
-			Serial.println(F("communication error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-			break;
-		case FINGERPRINT_IMAGEFAIL:
-			Serial.println(F("imaging error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-			break;
-		default:
-			Serial.println(F("unknown error"));
-			sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-			delay(500);
-			sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-			break;
-		}
+		result = get_image_and_log();
+		led_standard();
 	}
 
+	// The delay(1000)s are used as a crude means of debouncing
+
 	Serial.println(F("creating feature map..."));
-	result = sensor.image2Tz();
-	switch (result) {
-	case FINGERPRINT_OK:
-		break;
-	case FINGERPRINT_IMAGEMESS:
-		Serial.println(F("image too messy"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
+	result = image2tz_and_log(1);
+	if (result != FINGERPRINT_OK) {
+		led_standard();
 		delay(1000);
 		return;
-		break;
-	case FINGERPRINT_PACKETRECIEVEERR:
-		Serial.println(F("communication error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-		delay(1000);
-		return;
-		break;
-	case FINGERPRINT_FEATUREFAIL:
-		Serial.println(F("could not read finger features"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-		delay(1000);
-		return;
-		break;
-	case FINGERPRINT_INVALIDIMAGE:
-		Serial.println(F("invalid image"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-		delay(1000);
-		return;
-		break;
-	default:
-		Serial.println(F("unknown error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-		delay(1000);
-		return;
-		break;
 	}
 
 	Serial.println(F("searching for template..."));
@@ -429,26 +330,17 @@ void recognize_fingerprint()
 		break;
 	case FINGERPRINT_PACKETRECIEVEERR:
 		Serial.println(F("communication error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-		delay(1000);
-		return;
-		break;
+		goto finger_search_error;
 	case FINGERPRINT_NOTFOUND:
 		Serial.println(F("detected unknown fingerprint"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
-		break;
+		goto finger_search_error;
 	default:
 		Serial.println(F("unknown error"));
-		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_RED, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
+	finger_search_error:
+		led_warning();
+		led_standard();
 		delay(1000);
 		return;
-		break;
 	}
 
 	Serial.print(F("found fingerprint #"));
@@ -456,16 +348,14 @@ void recognize_fingerprint()
 	Serial.print(F("confidence: "));
 	Serial.println(confidence);
 
-	// TODO: send POST request to mattermore
-
+	// TODO: add mattermore callback
 	if (finger_id != 0) {
 		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_BLUE, 8);
-		delay(500);
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
+		delay(1000);
+		led_standard();
 	}
 
 	delay(1000);
-	return;
 }
 
 // Delete a fingerprint given its id
@@ -483,42 +373,44 @@ void delete_fingerprint(uint8_t id)
 		Serial.println(id);
 		break;
 	case FINGERPRINT_PACKETRECIEVEERR:
+		send_internal_error("communication error", 20);
 		Serial.println(F("communication error"));
-		send_internal_error("communication error", 200);
 		break;
 	case FINGERPRINT_BADLOCATION:
-		Serial.println(F("bad location"));
 		send_bad_request("invalid id", 11);
+		Serial.println(F("bad location"));
 		break;
 	case FINGERPRINT_FLASHERR:
-		Serial.println(F("flash error"));
 		send_internal_error("flash error", 12);
+		Serial.println(F("flash error"));
 		break;
 	default:
-		Serial.println(F("unknown error"));
 		send_internal_error("unkown error", 13);
+		Serial.println(F("unknown error"));
 		break;
 	}
-
-	return;
 }
 
-// Get all the used ids in the internal buffer
-void get_used_ids(char *id_buffer)
+// Get all the used ids in the internal buffer and send them as a string back
+// to the client
+void send_used_ids()
 {
+	char id_buffer[FINGERPRINT_LIB_SIZE + 1];
 	uint8_t result;
 	for (int i=0; i<FINGERPRINT_LIB_SIZE; i++) {
 		result = sensor.loadModel(i);
 		switch (result) {
 		case FINGERPRINT_OK:
-			*id_buffer = '1';
+			id_buffer[i] = '1';
 			break;
 		default:
-			*id_buffer = '0';
+			id_buffer[i] = '0';
 			break;
 		}
-		id_buffer++;
 	}
+	id_buffer[FINGERPRINT_LIB_SIZE] = 0;
+
+	send_ok(id_buffer, FINGERPRINT_LIB_SIZE);
 }
 
 void handle_message()
@@ -528,7 +420,8 @@ void handle_message()
 
 	uint8_t hmac_buffer[32];
 	if (!try_read_hmac_header(hmac_buffer)) {
-		send_bad_request("missing hmac", 13);
+		send_bad_request("missing HMAC", 13);
+		// TODO: send mattermore request as warning
 		return;
 	}
 
@@ -549,14 +442,13 @@ void handle_message()
 		return;
 	}
 
-	// TODO: validate HMAC
 	Sha256Class hmac_generator;
 	hmac_generator.initHmac(DOWN_COMMAND_KEY, strlen((const char *)DOWN_COMMAND_KEY));
 	hmac_generator.write(body_buffer, body_idx);
 	uint8_t *hmac = hmac_generator.resultHmac();
 
 	if (memcmp(hmac, hmac_buffer, 32) != 0) {
-		send_bad_request("invalid hmac", 13);
+		send_bad_request("invalid HMAC", 13);
 		// TODO: send mattermore request as warning
 		return;
 	}
@@ -633,15 +525,11 @@ void handle_message()
 			return;
 		}
 
-		sensor.LEDcontrol(FINGERPRINT_LED_BREATHING, 128, FINGERPRINT_LED_BLUE, 255);
-
-		ENROLL_ENABLED = true;
 		send_ok("", 0);
 
+		ENROLL_ENABLED = true;
 		enroll_fingerprint(parsed_id);
-
 		ENROLL_ENABLED = false;
-		sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
 	} else if (strcmp("delete", command) == 0) {
 		// An id cannot be longer than 3 digits + null byte
 		char id[4];
@@ -673,13 +561,8 @@ void handle_message()
 		}
 
 		delete_fingerprint(parsed_id);
-
-		send_ok(id, id_idx);
 	} else if (strcmp("list", command) == 0) {
-		char id_list[FINGERPRINT_LIB_SIZE + 1];
-		get_used_ids(id_list);
-		id_list[FINGERPRINT_LIB_SIZE] = 0;
-		send_ok(id_list, FINGERPRINT_LIB_SIZE);
+		send_used_ids();
 	} else {
 		send_bad_request("unknown command", 16);
 		return;
@@ -728,10 +611,13 @@ void setup()
 
 	Serial.println("attaching sensor interrupt...");
 	pinMode(SENSOR_INT, INPUT);
+	// TODO: this probably needs to be debounced,
+	// if not then use the watchdog timer to make sure it doesn't
+	// enter an infinite loop
 	attachInterrupt(digitalPinToInterrupt(SENSOR_INT), detect_fingerprint_ISR, FALLING);
 
-	Serial.println("done, entering loop");
-	sensor.LEDcontrol(FINGERPRINT_LED_ON, 0, FINGERPRINT_LED_PURPLE, 0);
+	Serial.println("started");
+	led_standard();
 }
 
 void loop()
@@ -739,5 +625,5 @@ void loop()
 	maintainEthernet();
 
 	handle_message();
-	recognize_fingerprint();
+	try_recognize_fingerprint();
 }
