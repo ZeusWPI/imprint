@@ -23,7 +23,7 @@ EthernetServer server(80);
 EthernetClient client;
 
 // Whether or not the program is in enroll mode
-volatile bool ENROLL_ENABLED = false;
+volatile bool enroll_enabled = false;
 
 // The timestamp sent with the previous request
 //
@@ -513,9 +513,9 @@ void handle_message()
 
 		send_ok("", 0);
 
-		ENROLL_ENABLED = true;
+		enroll_enabled = true;
 		try_enroll_fingerprint(parsed_id);
-		ENROLL_ENABLED = false;
+		enroll_enabled = false;
 	} else if (strcmp("delete", command) == 0) {
 		// An id cannot be longer than 3 digits + null byte
 		char id[4];
@@ -608,7 +608,7 @@ void loop()
 
 	handle_message();
 
-	if (!(digitalRead(SENSOR_INT)) && !(ENROLL_ENABLED)) {
+	if (!(digitalRead(SENSOR_INT)) && !(enroll_enabled)) {
 		try_recognize_fingerprint();
 	}
 }
