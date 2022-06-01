@@ -15,7 +15,7 @@
 
 #define SENSOR_TX 5
 #define SENSOR_RX 6
-#define SENSOR_INT 2
+#define SENSOR_INT 3
 
 SoftwareSerial serial(SENSOR_TX, SENSOR_RX);
 Adafruit_Fingerprint sensor = Adafruit_Fingerprint(&serial, 0);
@@ -24,25 +24,11 @@ EthernetClient client;
 
 // Whether or not the program is in enroll mode
 volatile bool ENROLL_ENABLED = false;
-// Whether or not a finger was detected;
-volatile bool FINGER_DETECTED = false;
 
 // The timestamp sent with the previous request
 //
 // Used to prevent replay attacks
 uint64_t previous_timestamp = 0;
-
-// ISR to handle a fingerprint being detected
-void detect_fingerprint_ISR()
-{
-	if (ENROLL_ENABLED) {
-		// If the sensor is enrolling a fingerprint it shouldn't try
-		// recognize one
-		return;
-	}
-
-	FINGER_DETECTED = true;
-}
 
 // Maintain ethernet connection and log errors
 void maintainEthernet()
@@ -198,7 +184,7 @@ uint8_t image2tz_and_log(uint8_t slot)
 }
 
 // Enroll a new fingerprint
-void enroll_fingerprint(uint8_t enroll_id)
+void try_enroll_fingerprint(uint8_t enroll_id)
 {
 	led_enroll();
 
@@ -210,7 +196,9 @@ void enroll_fingerprint(uint8_t enroll_id)
 	uint8_t result = -1;
 	while (result != FINGERPRINT_OK) {
 		result = get_image_and_log();
-		led_enroll();
+		if (!(result == FINGERPRINT_OK || result == FINGERPRINT_NOFINGER)) {
+			led_enroll();
+		}
 	}
 
 	Serial.println(F("creating first feature map..."));
@@ -232,7 +220,9 @@ void enroll_fingerprint(uint8_t enroll_id)
 	result = -1;
 	while (result != FINGERPRINT_OK) {
 		result = get_image_and_log();
-		led_enroll();
+		if (!(result == FINGERPRINT_OK || result == FINGERPRINT_NOFINGER)) {
+			led_enroll();
+		}
 	}
 
 	Serial.println(F("creating second feature map..."));
@@ -296,10 +286,6 @@ void enroll_fingerprint(uint8_t enroll_id)
 // Attempt to recognize the fingerprint on the sensor
 void try_recognize_fingerprint()
 {
-	if (!FINGER_DETECTED) return;
-
-	FINGER_DETECTED = false;
-
 	Serial.println(F("finger detected, attempting to recognize..."));
 
 	Serial.println(F("reading fingerprint..."));
@@ -528,7 +514,7 @@ void handle_message()
 		send_ok("", 0);
 
 		ENROLL_ENABLED = true;
-		enroll_fingerprint(parsed_id);
+		try_enroll_fingerprint(parsed_id);
 		ENROLL_ENABLED = false;
 	} else if (strcmp("delete", command) == 0) {
 		// An id cannot be longer than 3 digits + null byte
@@ -588,6 +574,9 @@ void setup()
 	Serial.println(F("starting webserver..."));
 	server.begin();
 
+	Serial.println(F("Setting up pins..."));
+	pinMode(SENSOR_INT, INPUT);
+
 	Serial.println(F("starting fingerprint sensor..."));
 	sensor.begin(57600);
 	delay(5);
@@ -609,13 +598,6 @@ void setup()
 	// Serial.print(F("packet len: ")); Serial.println(sensor.packet_len);
 	// Serial.print(F("baud rate: ")); Serial.println(sensor.baud_rate);
 
-	Serial.println("attaching sensor interrupt...");
-	pinMode(SENSOR_INT, INPUT);
-	// TODO: this probably needs to be debounced,
-	// if not then use the watchdog timer to make sure it doesn't
-	// enter an infinite loop
-	attachInterrupt(digitalPinToInterrupt(SENSOR_INT), detect_fingerprint_ISR, FALLING);
-
 	Serial.println("started");
 	led_standard();
 }
@@ -625,5 +607,8 @@ void loop()
 	maintainEthernet();
 
 	handle_message();
-	try_recognize_fingerprint();
+
+	if (!(digitalRead(SENSOR_INT)) && !(ENROLL_ENABLED)) {
+		try_recognize_fingerprint();
+	}
 }
