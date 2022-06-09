@@ -31,7 +31,7 @@ volatile bool enroll_enabled = false;
 uint64_t previous_timestamp = 0;
 
 // Maintain ethernet connection and log errors
-void maintainEthernet()
+void maintain_ethernet()
 {
 	switch (Ethernet.maintain()) {
 	case 1:
@@ -49,6 +49,53 @@ void maintainEthernet()
 	default:
 		break;
 	}
+}
+
+
+// Sends the processed commands back to mattermore to send to the channel
+bool send_mm_data(const char *message, int value)
+{
+	Serial.print(F("sending to mattermore: "));
+	Serial.print(message);
+	Serial.print(" ");
+	Serial.println(value);
+
+	EthernetClient requestclient;
+	if (requestclient.connect(MATTERMORE_SERVER_HOST, MATTERMORE_SERVER_PORT))
+	{
+		String msg = String("msg="+String(message)+"&val="+String(value));
+		Serial.println(msg);
+		Sha256Class hmac_generator;
+		hmac_generator.initHmac(UP_COMMAND_KEY, strlen((const char*) UP_COMMAND_KEY));
+		hmac_generator.write(msg.c_str(), msg.length());
+		uint8_t* hmac_calculated = hmac_generator.resultHmac();
+		char hmac_header_hex[32*2+1] = {0};
+		char* hmac_header_build = hmac_header_hex;
+		for (int i = 0; i < 32; i++) {
+			sprintf(hmac_header_build, "%.2X", hmac_calculated[i]);
+			hmac_header_build += 2;
+		}
+
+		requestclient.println(F("POST /fingerprint_cb HTTP/1.1"));
+		requestclient.print(F("Host: "));
+		requestclient.println(MATTERMORE_SERVER_HOST);
+		requestclient.print(HMAC_HEADER_NAME);
+		requestclient.println(hmac_header_hex);
+		requestclient.print(F("Content-Length: "));
+		requestclient.println(msg.length());
+		requestclient.println(F("Connection: close"));
+		requestclient.println();
+		requestclient.println(msg);
+		requestclient.flush();
+		requestclient.stop();
+
+		return true;
+	}
+
+	Serial.println(F("connection failed"));
+	requestclient.stop();
+
+	return false;
 }
 
 // Send an HTTP/400 Bad Request response and close the connection
@@ -273,7 +320,7 @@ void try_enroll_fingerprint(uint8_t enroll_id)
 		return;
 	}
 
-	// TODO: add mattermore callback
+	send_mm_data("enrolled", enroll_id);
 
 	Serial.print(F("enrolled fingerprint #"));
 	Serial.println(enroll_id);
@@ -334,7 +381,8 @@ void try_recognize_fingerprint()
 	Serial.print(F("confidence: "));
 	Serial.println(confidence);
 
-	// TODO: add mattermore callback
+	send_mm_data("detected", finger_id);
+
 	if (finger_id != 0) {
 		sensor.LEDcontrol(FINGERPRINT_LED_FLASHING, 16, FINGERPRINT_LED_BLUE, 8);
 		delay(1000);
@@ -407,7 +455,7 @@ void handle_message()
 	uint8_t hmac_buffer[32];
 	if (!try_read_hmac_header(hmac_buffer)) {
 		send_bad_request("missing HMAC", 13);
-		// TODO: send mattermore request as warning
+		send_mm_data("missing_hmac", 0);
 		return;
 	}
 
@@ -424,7 +472,7 @@ void handle_message()
 
 	if (client.available()) {
 		send_bad_request("body too long", 14);
-		// TODO: send mattermore request as warning
+		send_mm_data("too_long", 0);
 		return;
 	}
 
@@ -435,7 +483,7 @@ void handle_message()
 
 	if (memcmp(hmac, hmac_buffer, 32) != 0) {
 		send_bad_request("invalid HMAC", 13);
-		// TODO: send mattermore request as warning
+		send_mm_data("invalid_hmac", 0);
 		return;
 	}
 
@@ -457,7 +505,7 @@ void handle_message()
 
 	if (received_timestamp <= previous_timestamp) {
 		send_bad_request("replay", 7);
-		// TODO: send mattermore request to warn of replay
+		send_mm_data("replay", 0);
 		return;
 	}
 
@@ -604,7 +652,7 @@ void setup()
 
 void loop()
 {
-	maintainEthernet();
+	maintain_ethernet();
 
 	handle_message();
 
