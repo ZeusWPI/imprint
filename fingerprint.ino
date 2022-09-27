@@ -388,6 +388,7 @@ void delete_fingerprint(uint8_t id)
 		send_ok("", 0);
 		Serial.print(F("deleted fingerprint #"));
 		Serial.println(id);
+		send_mm_data("deleted", id);
 		break;
 	case FINGERPRINT_PACKETRECIEVEERR:
 		send_internal_error("communication error", 20);

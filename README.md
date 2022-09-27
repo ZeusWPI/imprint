@@ -61,31 +61,27 @@ index is unused, a 1 indicates that it is used.
 
 ## Callbacks
 
-### Body too long
-### Missing HMAC
-### Invalid HMAC
+All callbacks are POST requests to `mattermore.zeus.gent/fingerprint_cb` with
+query parameters `msg` and `val` representing a message and an optional
+associated value, respectively. \
+If `val` is not specified, it is irrelevant.
 
-### Fingerprint detected
-
-POST {mattermore_url}/fingerprint/{ID}/detect
-
-### Fingerprint enrolled
-
-POST {mattermore_url}/fingerprint/{ID}
-
-### Fingerprint deleted
-
-DELETE {mattermore_url}/fingerprint/{ID}
+ - Body too long - `msg: too_long`
+ - Missing HMAC - `msg: missing_hmac`
+ - Invalid HMAC - `msg: invalid_hmac`
+ - Replay Attack - `msg: replay`
+ - Fingerprint detected - `msg: detected, val: {id}`
+ - Fingerprint enrolled - `msg: enrolled, val: {id}`
+ - Fingerprint deleted - `msg: deleted, val: {id}`
 
 ## Hardware
 
- - Arduino UNO
- - Ethernet shield
+ - ESP32
  - R503 Fingerprint Sensor
 
 ## Building
 
- 1. Install the [ethernet](https://www.arduino.cc/reference/en/libraries/ethernet/) and [adafruit fingerprint](https://github.com/adafruit/Adafruit-Fingerprint-Sensor-Library) libraries
+ 1. Install the [adafruit fingerprint](https://github.com/adafruit/Adafruit-Fingerprint-Sensor-Library) library
  2. Edit `secrets.h` to contain the correct values
  3. Upload the sketch
 
