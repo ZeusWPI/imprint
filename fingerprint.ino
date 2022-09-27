@@ -9,7 +9,7 @@
 #define MESSAGE_BODY_SIZE 128 + 1 // + 1 for null byte
 #define FINGERPRINT_LIB_SIZE 200
 
-#define MATTERMORE_SERVER_HOST "example.com"
+#define MATTERMORE_SERVER_HOST "mattermore.zeus.gent"
 #define MATTERMORE_SERVER_PORT 80
 
 #define SENSOR_TX 16
