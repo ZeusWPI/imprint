@@ -62,8 +62,9 @@ index is unused, a 1 indicates that it is used.
 ## Callbacks
 
 All callbacks are POST requests to `mattermore.zeus.gent/fingerprint_cb` with
-query parameters `msg` and `val` representing a message and an optional
-associated value, respectively. \
+two lines in the body: `msg`, encoding the message to be sent, and `val`, an
+optional related value (eg. an ID)
+
 If `val` is not specified, it is irrelevant.
 
  - Body too long - `msg: too_long`

@@ -43,7 +43,7 @@ bool send_mm_data(const char *message, int value)
 	WiFiClient requestclient;
 	if (requestclient.connect(MATTERMORE_SERVER_HOST, MATTERMORE_SERVER_PORT))
 	{
-		String msg = String("msg="+String(message)+"&val="+String(value));
+		String msg = String(String(message)+"\n"+String(value));
 		Serial.println(msg);
 
 		Sha256Class hmac_generator;
