@@ -66,6 +66,7 @@ bool send_mm_data(const char *message, int value)
 		requestclient.println(hmac_header_hex);
 		requestclient.print(F("Content-Length: "));
 		requestclient.println(msg.length());
+		requestclient.println(F("Content-Type: text/plain"));
 		requestclient.println(F("Connection: close"));
 		requestclient.println();
 		requestclient.println(msg);
