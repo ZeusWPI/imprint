@@ -124,6 +124,7 @@ bool try_read_hmac_header(uint8_t *buffer)
 {
 	if (!client.find(HMAC_HEADER_NAME)) return false;
 
+	// 3 bytes as string must be null terminated
 	char octet[3] = {0};
 	for (uint8_t i=0; i<32; i++) {
 		// The HMAC header is hex encoded so two bytes must be read
