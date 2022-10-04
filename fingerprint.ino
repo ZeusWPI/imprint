@@ -1,6 +1,5 @@
 #include <Adafruit_Fingerprint.h>
-#include <SPI.h>
-#include <Ethernet.h>
+#include <WiFi.h>
 
 #include "./sha256/sha256.h"
 #include "./sha256/sha256.cpp"
@@ -13,14 +12,17 @@
 #define MATTERMORE_SERVER_HOST "mattermore.zeus.gent"
 #define MATTERMORE_SERVER_PORT 80
 
-#define SENSOR_TX 5
-#define SENSOR_RX 6
-#define SENSOR_INT 3
+#define SENSOR_TX 16
+#define SENSOR_RX 17
+#define SENSOR_INT 2
 
-SoftwareSerial serial(SENSOR_TX, SENSOR_RX);
-Adafruit_Fingerprint sensor = Adafruit_Fingerprint(&serial, 0);
-EthernetServer server(80);
-EthernetClient client;
+const char* WIFI_SSID = "Zeus WPI";
+const char* WIFI_PSK = "zeusisdemax";
+
+WiFiServer server(80);
+WiFiClient client;
+
+Adafruit_Fingerprint sensor = Adafruit_Fingerprint(&Serial2, 0);
 
 // Whether or not the program is in enroll mode
 volatile bool enroll_enabled = false;
@@ -30,28 +32,6 @@ volatile bool enroll_enabled = false;
 // Used to prevent replay attacks
 uint64_t previous_timestamp = 0;
 
-// Maintain ethernet connection and log errors
-void maintain_ethernet()
-{
-	switch (Ethernet.maintain()) {
-	case 1:
-		Serial.println(F("ethernet renewal fail"));
-		break;
-	case 2:
-		Serial.println(F("ethernet renewed"));
-		break;
-	case 3:
-		Serial.println(F("ethernet rebind fail"));
-		break;
-	case 4:
-		Serial.println(F("ethernet rebind success"));
-		break;
-	default:
-		break;
-	}
-}
-
-
 // Sends the processed commands back to mattermore to send to the channel
 bool send_mm_data(const char *message, int value)
 {
@@ -60,15 +40,18 @@ bool send_mm_data(const char *message, int value)
 	Serial.print(" ");
 	Serial.println(value);
 
-	EthernetClient requestclient;
-	if (requestclient.connect(MATTERMORE_SERVER_HOST, MATTERMORE_SERVER_PORT))
+	WiFiClient requestclient;
+	int status;
+	if (status = requestclient.connect(MATTERMORE_SERVER_HOST, MATTERMORE_SERVER_PORT))
 	{
-		String msg = String("msg="+String(message)+"&val="+String(value));
-		Serial.println(msg);
+		String msg = String(String(message)+"\n"+String(value));
+
 		Sha256Class hmac_generator;
 		hmac_generator.initHmac(UP_COMMAND_KEY, strlen((const char*) UP_COMMAND_KEY));
 		hmac_generator.write(msg.c_str(), msg.length());
+
 		uint8_t* hmac_calculated = hmac_generator.resultHmac();
+
 		char hmac_header_hex[32*2+1] = {0};
 		char* hmac_header_build = hmac_header_hex;
 		for (int i = 0; i < 32; i++) {
@@ -83,6 +66,7 @@ bool send_mm_data(const char *message, int value)
 		requestclient.println(hmac_header_hex);
 		requestclient.print(F("Content-Length: "));
 		requestclient.println(msg.length());
+		requestclient.println(F("Content-Type: text/plain"));
 		requestclient.println(F("Connection: close"));
 		requestclient.println();
 		requestclient.println(msg);
@@ -93,6 +77,7 @@ bool send_mm_data(const char *message, int value)
 	}
 
 	Serial.println(F("connection failed"));
+	Serial.println(status);
 	requestclient.stop();
 
 	return false;
@@ -140,6 +125,7 @@ bool try_read_hmac_header(uint8_t *buffer)
 {
 	if (!client.find(HMAC_HEADER_NAME)) return false;
 
+	// 3 bytes as string must be null terminated
 	char octet[3] = {0};
 	for (uint8_t i=0; i<32; i++) {
 		// The HMAC header is hex encoded so two bytes must be read
@@ -405,6 +391,7 @@ void delete_fingerprint(uint8_t id)
 		send_ok("", 0);
 		Serial.print(F("deleted fingerprint #"));
 		Serial.println(id);
+		send_mm_data("deleted", id);
 		break;
 	case FINGERPRINT_PACKETRECIEVEERR:
 		send_internal_error("communication error", 20);
@@ -488,7 +475,7 @@ void handle_message()
 	}
 
 	uint8_t chr;
-	body_idx = 0; // Reuse body_idx to avoid allocating another variable
+	body_idx = 0;
 
 	uint64_t received_timestamp = 0;
 	while ((chr = body_buffer[body_idx]) != ';') {
@@ -595,6 +582,7 @@ void handle_message()
 		}
 
 		delete_fingerprint(parsed_id);
+		send_ok("", 0);
 	} else if (strcmp("list", command) == 0) {
 		send_used_ids();
 	} else {
@@ -614,26 +602,30 @@ void setup()
 	Serial.begin(115200);
 	Serial.println(F("starting..."));
 
-	Serial.println(F("initialising ethernet..."));
-	byte MAC[] = { 0x00, 0x20, 0x91, 0x00, 0x00, 0x01 };
-	byte IP[] = { 10, 0, 1, 14 };
-	Ethernet.begin(MAC, IP);
+	Serial.print(F("connecting to wifi..."));
+	WiFi.begin(WIFI_SSID, WIFI_PSK);
+	while (WiFi.status() != WL_CONNECTED) {
+		delay(100);
+		Serial.print(".");
+	}
+	Serial.println(F(""));
+	Serial.println(F("wifi connected"));
+	Serial.print(F("ip address: "));
+	Serial.println(WiFi.localIP());
 
 	Serial.println(F("starting webserver..."));
 	server.begin();
 
-	Serial.println(F("Setting up pins..."));
-	pinMode(SENSOR_INT, INPUT);
+	Serial.println(F("setting pins..."));
+	pinMode(SENSOR_INT, INPUT_PULLUP);
 
 	Serial.println(F("starting fingerprint sensor..."));
 	sensor.begin(57600);
 	delay(5);
 
 	if (!sensor.verifyPassword()) {
-		Serial.println(F("fingerprint sensor not found or password was incorrect"));
-		while (1) {
-			delay(1);
-		}
+		Serial.println(F("fingerprint sensor not found or password protected"));
+		return;
 	}
 
 	// Serial.println(F("reading sensor parameters..."));
@@ -646,14 +638,12 @@ void setup()
 	// Serial.print(F("packet len: ")); Serial.println(sensor.packet_len);
 	// Serial.print(F("baud rate: ")); Serial.println(sensor.baud_rate);
 
-	Serial.println("started");
+	Serial.println(F("started"));
 	led_standard();
 }
 
 void loop()
 {
-	maintain_ethernet();
-
 	handle_message();
 
 	if (!(digitalRead(SENSOR_INT)) && !(enroll_enabled)) {

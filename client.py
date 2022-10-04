@@ -3,7 +3,7 @@ import time
 import requests
 import hashlib
 import hmac
-uplink = "http://10.0.1.14"
+uplink = "http://10.1.0.209"
 
 if len(sys.argv) == 1:
 	print("need at least 1 argument")
