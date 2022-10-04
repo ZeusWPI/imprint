@@ -41,10 +41,10 @@ bool send_mm_data(const char *message, int value)
 	Serial.println(value);
 
 	WiFiClient requestclient;
-	if (requestclient.connect(MATTERMORE_SERVER_HOST, MATTERMORE_SERVER_PORT))
+	int status;
+	if (status = requestclient.connect(MATTERMORE_SERVER_HOST, MATTERMORE_SERVER_PORT))
 	{
 		String msg = String(String(message)+"\n"+String(value));
-		Serial.println(msg);
 
 		Sha256Class hmac_generator;
 		hmac_generator.initHmac(UP_COMMAND_KEY, strlen((const char*) UP_COMMAND_KEY));
@@ -77,6 +77,7 @@ bool send_mm_data(const char *message, int value)
 	}
 
 	Serial.println(F("connection failed"));
+	Serial.println(status);
 	requestclient.stop();
 
 	return false;
