@@ -71,6 +71,13 @@ bool send_mm_data(const char *message, int value)
 		requestclient.println();
 		requestclient.println(msg);
 		requestclient.flush();
+
+		while (requestclient.connected() || requestclient.available()) {
+			if (requestclient.available()) {
+				requestclient.read();
+			}
+		}
+
 		requestclient.stop();
 
 		return true;
