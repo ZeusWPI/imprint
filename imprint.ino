@@ -608,12 +608,17 @@ void setup()
 {
 	Serial.begin(115200);
 	Serial.println(F("starting..."));
-
+	WiFi.setHostname("esp32-fingerprint-sensor");
 	Serial.print(F("connecting to wifi..."));
 	WiFi.begin(WIFI_SSID, WIFI_PSK);
+	int connection_counter = 0;
 	while (WiFi.status() != WL_CONNECTED) {
 		delay(100);
 		Serial.print(".");
+		connection_counter++;
+		if (connection_counter > 1000) {
+			ESP.restart();
+		}
 	}
 	Serial.println(F(""));
 	Serial.println(F("wifi connected"));
@@ -655,5 +660,9 @@ void loop()
 
 	if (!(digitalRead(SENSOR_INT)) && !(enroll_enabled)) {
 		try_recognize_fingerprint();
+	}
+
+	if ((WiFi.status() != WL_CONNECTED)) {
+		ESP.restart();
 	}
 }

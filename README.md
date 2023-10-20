@@ -82,6 +82,7 @@ If `val` is not specified, it is irrelevant.
 
 ## Building
 
+ 0. Install Arduino and configure it for the ESP32
  1. Install the [adafruit fingerprint](https://github.com/adafruit/Adafruit-Fingerprint-Sensor-Library) library
  2. Edit `secrets.h` to contain the correct values
  3. Upload the sketch
